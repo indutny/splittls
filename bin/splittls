@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+var stls = require('../');
+
+stls.createServer({
+  path: process.env.STLS_SOCKET,
+  target: {
+    host: process.env.STLS_TARGET_HOST || '127.0.0.1',
+    port: process.env.STLS_TARGET_PORT || 4443,
+  }
+}).listen(process.env.STLS_PORT || 1443, process.env.STLS_HOST, function() {
+  console.log('Listening');
+});

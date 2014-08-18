@@ -1,0 +1,25 @@
+{
+  "name": "splittls",
+  "version": "0.0.0",
+  "description": "",
+  "main": "lib/splittls.js",
+  "scripts": {
+    "test": "mocha --reporter spec test/**/*-test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:indutny/splittls"
+  },
+  "keywords": [
+    "TLS"
+  ],
+  "author": "Fedor Indutny <fedor@indutny.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/indutny/splittls/issues"
+  },
+  "homepage": "https://github.com/indutny/splittls",
+  "dependencies": {
+    "tls.js": "^0.2.0"
+  }
+}
