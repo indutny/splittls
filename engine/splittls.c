@@ -219,6 +219,7 @@ static int stls_rsa_mod_exp(BIGNUM* r0,
                             BN_CTX* ctx) {
   stls_msg_mod_exp_t body;
   int size;
+  int r;
   stls_msg_hdr_t reply;
   stls_msg_mod_exp_reply_t* reply_body;
 
@@ -235,14 +236,20 @@ static int stls_rsa_mod_exp(BIGNUM* r0,
     return 0;
   }
 
+  r = 0;
+
   /* Invalid message */
   if (reply.type != kSTLSMsgModExpReply)
-    return 0;
+    goto done;
 
   /* Parse reply */
   if (BN_bin2bn(reply_body->num, reply.size, r0) == NULL)
-    return 0;
+    goto done;
 
+  r = 1;
+
+done:
+  free(reply_body);
   return 1;
 }
 
