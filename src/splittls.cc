@@ -18,8 +18,6 @@ namespace splittls {
 using namespace node;
 using namespace v8;
 
-static const RSA_METHOD* rsa_eay;
-
 class Engine : public ObjectWrap {
  public:
   static Handle<Value> New(const Arguments& args) {
@@ -53,54 +51,38 @@ class Engine : public ObjectWrap {
 
     char* data = Buffer::Data(args[0]);
     size_t len = Buffer::Length(args[0]);
-    BIGNUM* I = BN_bin2bn(reinterpret_cast<unsigned char*>(data), len, e->i_);
-    assert(I == e->i_);
 
-    if (!rsa_eay->rsa_mod_exp(e->r_, I, e->pkey_->pkey.rsa, e->ctx_)) {
+    // We use RSA_private_decrypt just to perform the blinding that is turned
+    // off on the frontend.
+    int r = RSA_private_decrypt(len,
+                                reinterpret_cast<const unsigned char*>(data),
+                                e->out_,
+                                e->pkey_->pkey.rsa,
+                                RSA_NO_PADDING);
+    if (r <= 0) {
       return ThrowException(Exception::Error(String::New(
-          "Mod exp failed")));
+          "RSA mod exp failed")));
     }
 
-    char* hex = BN_bn2hex(e->r_);
-    assert(hex != NULL);
-
-    Local<String> hstr = String::New(hex);
-    free(hex);
-    return scope.Close(hstr);
+    return scope.Close(
+        Buffer::New(reinterpret_cast<char*>(e->out_), r)->handle_);
   }
 
  protected:
   Engine(EVP_PKEY* pkey) : pkey_(pkey) {
-    ctx_ = BN_CTX_new();
-    assert(ctx_ != NULL);
-
-    BN_CTX_start(ctx_);
-    r_ = BN_CTX_get(ctx_);
-    i_ = BN_CTX_get(ctx_);
-    assert(r_ != NULL && i_ != NULL);
-
-    assert(ctx_ != NULL);
+    out_ = new unsigned char[RSA_size(pkey->pkey.rsa)];
   }
 
   ~Engine() {
-    BN_CTX_end(ctx_);
-    BN_CTX_free(ctx_);
     EVP_PKEY_free(pkey_);
+    delete[] out_;
 
     pkey_ = NULL;
-    ctx_ = NULL;
-    r_ = NULL;
-    i_ = NULL;
+    out_ = NULL;
   }
 
-  static void FreeHex(char* data, void* hint) {
-    free(data);
-  }
-
-  BIGNUM* r_;
-  BIGNUM* i_;
   EVP_PKEY* pkey_;
-  BN_CTX* ctx_;
+  unsigned char* out_;
 };
 
 static void Init(Handle<Object> target) {
@@ -109,7 +91,6 @@ static void Init(Handle<Object> target) {
   // Init OpenSSL
   OpenSSL_add_all_algorithms();
   RAND_poll();
-  rsa_eay = RSA_PKCS1_SSLeay();
 
   Local<FunctionTemplate> t = FunctionTemplate::New(Engine::New);
 
