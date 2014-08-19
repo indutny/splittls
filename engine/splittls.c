@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -55,25 +56,42 @@ static stls_t stls_state;
 
 static int stls_lazy_connect(stls_t* stls) {
   int r;
+  int fd;
   struct sockaddr_un addr;
+  struct timeval tv;
 
   if (stls_state.channel != -1)
     return 0;
 
-  stls_state.channel = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (stls_state.channel == -1)
+  fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd == -1)
     return -1;
+
+  /* Wait two seconds for reply */
+  tv.tv_sec = 2;
+  tv.tv_usec = 0;
+  r = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  if (r != 0)
+    goto fatal;
+
+  r = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  if (r != 0)
+    goto fatal;
 
   memset(&addr, 0, sizeof(addr));
   strncpy(addr.sun_path, stls_state.channel_path, sizeof(addr.sun_path));
   addr.sun_family = AF_UNIX;
 
-  r = connect(stls_state.channel, (struct sockaddr*) &addr, sizeof(addr));
-  if (r != 0) {
-    close(stls_state.channel);
-    stls_state.channel = -1;
-  }
+  r = connect(fd, (struct sockaddr*) &addr, sizeof(addr));
+  if (r != 0)
+    goto fatal;
 
+  stls_state.channel = fd;
+
+  return 0;
+
+fatal:
+  close(fd);
   return r;
 }
 
@@ -178,25 +196,35 @@ static int stls_query(stls_t* stls,
   stls_msg_hdr_t hdr;
   struct iovec iov[2];
   int r;
-
-  r = stls_lazy_connect(stls);
-  if (r != 0)
-    return r;
+  int tries;
 
   hdr.version = htons(STLS_VERSION);
   hdr.type = htons(type);
   hdr.size = htonl(size);
 
-  iov[0].iov_base = &hdr;
-  iov[0].iov_len = sizeof(hdr);
-  iov[1].iov_base = body;
-  iov[1].iov_len = size;
+  /*
+   * Try sending a couple of times, the connection could be broken at start,
+   * and we won't notice it until `stls_send()` call.
+   */
+  tries = 0;
+  do {
+    r = stls_lazy_connect(stls);
+    if (r != 0)
+      continue;
 
-  r = stls_send(stls, iov, ARRAY_SIZE(iov));
-  if (r != 0)
-    return r;
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = body;
+    iov[1].iov_len = size;
 
-  r = stls_recv(stls, resp, sizeof(*resp));
+    r = stls_send(stls, iov, ARRAY_SIZE(iov));
+    if (r != 0)
+      continue;
+
+    r = stls_recv(stls, resp, sizeof(*resp));
+    if (r != 0)
+      continue;
+  } while (r != 0 && ++tries < 2);
   if (r != 0)
     return r;
 
