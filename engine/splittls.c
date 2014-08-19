@@ -363,7 +363,7 @@ static int stls_ctrl(ENGINE *e,
     case ENGINE_CTRL_GET_CMD_FLAGS:
       return ENGINE_CMD_FLAG_STRING;
     case ENGINE_CTRL_GET_CMD_FROM_NAME:
-      if (strncmp((char*) p, "STLS_SOCK", 9) != 0)
+      if (strncmp((char*) p, "STLS_SOCKET", 11) != 0)
         return STLS_ENGINE_CMD_IGNORE;
 
       return STLS_ENGINE_CMD_SOCK;
