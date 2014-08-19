@@ -1,6 +1,6 @@
-#include <openssl/engine.h>
-#include <openssl/rsa.h>
-#include <openssl/bn.h>
+#include "openssl/engine.h"
+#include "openssl/rsa.h"
+#include "openssl/bn.h"
 
 #include "common.h"
 
@@ -218,8 +218,8 @@ static int stls_query(stls_t* stls,
 
 
 static int stls_rsa_init(RSA* rsa) {
+  /* Blinding will be performed on backend */
   rsa->flags |= RSA_FLAG_NO_BLINDING;
-
   return 1;
 }
 
@@ -261,6 +261,7 @@ static int stls_rsa_mod_exp(BIGNUM* r0,
 
 done:
   free(reply_body);
+  reply_body = NULL;
   return 1;
 }
 

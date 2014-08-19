@@ -9,10 +9,8 @@ if (config) {
   config = {};
 }
 
-stls.createServer(config)
-    .listen(config.port || 443, config.host || '::', function() {
+stls.createBackend(config)
+    .listen(config.port || 8000, config.host || '::', function() {
       var addr = this.address();
       console.log('Listening on [%s]:%d', addr.address, addr.port);
-      console.log('  Proxying to [%s]:%d', this.target.host, this.target.port);
-      console.log('  Backend at [%s]:%d', this.backend.host, this.backend.port);
     });
