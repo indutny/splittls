@@ -7,7 +7,6 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -54,10 +53,9 @@ struct stls_s {
   char* channel_path;
 };
 
-static pthread_once_t stls_st_once = PTHREAD_ONCE_INIT;
-static pthread_key_t stls_st_key;
-
-static stls_t* stls_get();
+static stls_t stls_st = {
+  .channel = -1
+};
 
 
 static int stls_lazy_connect(stls_t* stls) {
@@ -269,7 +267,7 @@ static int stls_rsa_mod_exp(BIGNUM* r0,
   stls_msg_mod_exp_reply_t* reply_body;
   stls_t* st;
 
-  st = stls_get();
+  st = &stls_st;
 
   size = BN_num_bytes(I);
   assert(size <= (int) sizeof(body.num));
@@ -311,23 +309,21 @@ static RSA_METHOD stls_rsa = {
 
 
 static int stls_init(ENGINE* e) {
+  if (stls_st.channel_path == NULL)
+    stls_st.channel_path = strdup(getenv("STLS_SOCKET"));
   return 1;
 }
 
 
 static int stls_finish(ENGINE* e) {
-  int r;
   stls_t* st;
 
-  st = stls_get();
+  st = &stls_st;
   close(st->channel);
   st->channel = -1;
   free(st->channel_path);
   st->channel_path = NULL;
   free(st);
-
-  r = pthread_setspecific(stls_st_key, NULL);
-  assert(r == 0);
 
   return 1;
 }
@@ -351,7 +347,7 @@ static int stls_ctrl(ENGINE *e,
     case STLS_ENGINE_CMD_IGNORE:
       return 1;
     case STLS_ENGINE_CMD_SOCK:
-      stls_get()->channel_path = (char*) p;
+      stls_st.channel_path = (char*) p;
       return 1;
     default:
       return 0;
@@ -360,13 +356,10 @@ static int stls_ctrl(ENGINE *e,
 
 
 static int stls_bind_fn(ENGINE* e, const char* id) {
-  stls_t* st;
   const RSA_METHOD* rsa_eay;
 
   if (id != NULL && strcmp(id, "splittls") != 0)
     return 0;
-
-  st = stls_get();
 
   if (!ENGINE_set_id(e, "splittls") ||
       !ENGINE_set_name(e, "SplitTLS") ||
@@ -388,37 +381,6 @@ static int stls_bind_fn(ENGINE* e, const char* id) {
   return 1;
 }
 
-
-static void stls_once_init() {
-  int r;
-
-  r = pthread_key_create(&stls_st_key, free);
-  assert(r == 0);
-}
-
-
-stls_t* stls_get() {
-  int r;
-  stls_t* st;
-
-  r = pthread_once(&stls_st_once, stls_once_init);
-  assert(r == 0);
-
-  st = pthread_getspecific(stls_st_key);
-  if (st != NULL)
-    return st;
-
-  st = calloc(1, sizeof(*st));
-  assert(st != NULL);
-
-  st->channel_path = strdup(getenv("STLS_SOCKET"));
-  st->channel = -1;
-
-  r = pthread_setspecific(stls_st_key, st);
-  assert(r == 0);
-
-  return st;
-}
 
 IMPLEMENT_DYNAMIC_CHECK_FN()
 IMPLEMENT_DYNAMIC_BIND_FN(stls_bind_fn)
