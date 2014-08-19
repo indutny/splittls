@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -19,6 +20,8 @@
 
 
 #define STLS_VERSION 1
+#define STLS_ENGINE_CMD_IGNORE 0x1000
+#define STLS_ENGINE_CMD_SOCK   0x1001
 
 typedef enum stls_msg_type_e stls_msg_type_t;
 typedef struct stls_msg_hdr_s stls_msg_hdr_t;
@@ -48,10 +51,13 @@ struct stls_msg_mod_exp_reply_s {
 
 struct stls_s {
   int channel;
-  const char* channel_path;
+  char* channel_path;
 };
 
-static stls_t stls_state;
+static pthread_once_t stls_st_once = PTHREAD_ONCE_INIT;
+static pthread_key_t stls_st_key;
+
+static stls_t* stls_get();
 
 
 static int stls_lazy_connect(stls_t* stls) {
@@ -60,8 +66,8 @@ static int stls_lazy_connect(stls_t* stls) {
   struct sockaddr_un addr;
   struct timeval tv;
 
-  if (stls_state.channel != -1)
-    return 0;
+  if (stls->channel_path == NULL)
+    return -1;
 
   fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd == -1)
@@ -79,14 +85,14 @@ static int stls_lazy_connect(stls_t* stls) {
     goto fatal;
 
   memset(&addr, 0, sizeof(addr));
-  strncpy(addr.sun_path, stls_state.channel_path, sizeof(addr.sun_path));
+  strncpy(addr.sun_path, stls->channel_path, sizeof(addr.sun_path));
   addr.sun_family = AF_UNIX;
 
   r = connect(fd, (struct sockaddr*) &addr, sizeof(addr));
   if (r != 0)
     goto fatal;
 
-  stls_state.channel = fd;
+  stls->channel = fd;
 
   return 0;
 
@@ -97,8 +103,8 @@ fatal:
 
 
 static void stls_handle_error(stls_t* stls, int err) {
-  close(stls_state.channel);
-  stls_state.channel = -1;
+  close(stls->channel);
+  stls->channel = -1;
 }
 
 
@@ -261,12 +267,15 @@ static int stls_rsa_mod_exp(BIGNUM* r0,
   int r;
   stls_msg_hdr_t reply;
   stls_msg_mod_exp_reply_t* reply_body;
+  stls_t* st;
+
+  st = stls_get();
 
   size = BN_num_bytes(I);
   assert(size <= (int) sizeof(body.num));
   BN_bn2bin(I, body.num);
 
-  if (stls_query(&stls_state,
+  if (stls_query(st,
                  kSTLSMsgModExp,
                  size,
                  &body,
@@ -302,41 +311,69 @@ static RSA_METHOD stls_rsa = {
 
 
 static int stls_init(ENGINE* e) {
-  if (stls_state.channel_path != NULL)
-    return 1;
-
-  stls_state.channel_path = getenv("STLS_SOCKET");
-  if (stls_state.channel_path == NULL)
-    return 0;
-
-  stls_state.channel = -1;
-
   return 1;
 }
 
 
 static int stls_finish(ENGINE* e) {
-  if (stls_state.channel_path == NULL)
-    return 1;
+  int r;
+  stls_t* st;
 
-  close(stls_state.channel);
-  stls_state.channel = -1;
-  stls_state.channel_path = NULL;
+  st = stls_get();
+  close(st->channel);
+  st->channel = -1;
+  free(st->channel_path);
+  st->channel_path = NULL;
+  free(st);
+
+  r = pthread_setspecific(stls_st_key, NULL);
+  assert(r == 0);
 
   return 1;
 }
 
 
+static int stls_ctrl(ENGINE *e,
+                     int cmd,
+                     long i,
+                     void* p,
+                     void (*f)(void)) {
+  switch (cmd) {
+    case ENGINE_CTRL_HAS_CTRL_FUNCTION:
+      return 1;
+    case ENGINE_CTRL_GET_CMD_FLAGS:
+      return ENGINE_CMD_FLAG_STRING;
+    case ENGINE_CTRL_GET_CMD_FROM_NAME:
+      if (strncmp((char*) p, "STLS_SOCK", 9) != 0)
+        return STLS_ENGINE_CMD_IGNORE;
+
+      return STLS_ENGINE_CMD_SOCK;
+    case STLS_ENGINE_CMD_IGNORE:
+      return 1;
+    case STLS_ENGINE_CMD_SOCK:
+      stls_get()->channel_path = (char*) p;
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+
 static int stls_bind_fn(ENGINE* e, const char* id) {
+  stls_t* st;
   const RSA_METHOD* rsa_eay;
 
   if (id != NULL && strcmp(id, "splittls") != 0)
     return 0;
+
+  st = stls_get();
+
   if (!ENGINE_set_id(e, "splittls") ||
       !ENGINE_set_name(e, "SplitTLS") ||
       !ENGINE_set_RSA(e, &stls_rsa) ||
       !ENGINE_set_init_function(e, stls_init) ||
-      !ENGINE_set_finish_function(e, stls_finish)) {
+      !ENGINE_set_finish_function(e, stls_finish) ||
+      !ENGINE_set_ctrl_function(e, stls_ctrl)) {
     return 0;
   }
 
@@ -349,6 +386,38 @@ static int stls_bind_fn(ENGINE* e, const char* id) {
   stls_rsa.bn_mod_exp = rsa_eay->bn_mod_exp;
 
   return 1;
+}
+
+
+static void stls_once_init() {
+  int r;
+
+  r = pthread_key_create(&stls_st_key, free);
+  assert(r == 0);
+}
+
+
+stls_t* stls_get() {
+  int r;
+  stls_t* st;
+
+  r = pthread_once(&stls_st_once, stls_once_init);
+  assert(r == 0);
+
+  st = pthread_getspecific(stls_st_key);
+  if (st != NULL)
+    return st;
+
+  st = calloc(1, sizeof(*st));
+  assert(st != NULL);
+
+  st->channel_path = strdup(getenv("STLS_SOCKET"));
+  st->channel = -1;
+
+  r = pthread_setspecific(stls_st_key, st);
+  assert(r == 0);
+
+  return st;
 }
 
 IMPLEMENT_DYNAMIC_CHECK_FN()
