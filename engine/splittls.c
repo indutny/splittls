@@ -347,7 +347,6 @@ static int stls_finish(ENGINE* e) {
   st = &stls_st;
   free(st->channel_path);
   st->channel_path = NULL;
-  free(st);
 
   return 1;
 }
