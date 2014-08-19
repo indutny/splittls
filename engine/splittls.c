@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -49,16 +50,18 @@ struct stls_msg_mod_exp_reply_s {
 };
 
 struct stls_s {
-  int channel;
   char* channel_path;
+
+  pthread_once_t once;
+  pthread_key_t key;
 };
 
 static stls_t stls_st = {
-  .channel = -1
+  .once = PTHREAD_ONCE_INIT
 };
 
 
-static int stls_lazy_connect(stls_t* stls) {
+static int stls_lazy_connect(stls_t* stls, int* chan) {
   int r;
   int fd;
   struct sockaddr_un addr;
@@ -90,7 +93,9 @@ static int stls_lazy_connect(stls_t* stls) {
   if (r != 0)
     goto fatal;
 
-  stls->channel = fd;
+  r = pthread_setspecific(stls->key, (void*) (intptr_t) (fd + 1));
+  *chan = fd;
+  assert(r == 0);
 
   return 0;
 
@@ -101,17 +106,22 @@ fatal:
 
 
 static void stls_handle_error(stls_t* stls, int err) {
-  close(stls->channel);
-  stls->channel = -1;
+  int chan;
+  int r;
+
+  chan = (intptr_t) pthread_getspecific(stls->key) - 1;
+  close(chan);
+  r = pthread_setspecific(stls->key, NULL);
+  assert(r == 0);
 }
 
 
-static int stls_send(stls_t* stls, struct iovec* iov, int iovcnt) {
+static int stls_send(stls_t* stls, int chan, struct iovec* iov, int iovcnt) {
   int r;
   size_t left;
 
   /* Can't send after disconnect */
-  if (stls->channel == -1)
+  if (chan == -1)
     return -1;
 
   left = 0;
@@ -120,7 +130,7 @@ static int stls_send(stls_t* stls, struct iovec* iov, int iovcnt) {
 
   while (left > 0) {
     do
-      r = writev(stls->channel, iov, iovcnt);
+      r = writev(chan, iov, iovcnt);
     while (r == -1 && errno == EINTR);
 
     if (r == -1)
@@ -157,18 +167,18 @@ fatal:
 }
 
 
-static int stls_recv(stls_t* stls, void* buf, int size) {
+static int stls_recv(stls_t* stls, int chan, void* buf, int size) {
   int r;
   char* ptr;
 
   /* Can't receive after disconnect */
-  if (stls->channel == -1)
+  if (chan == -1)
     return -1;
 
   ptr = (char*) buf;
   while (size > 0) {
     do
-      r = read(stls->channel, buf, size);
+      r = read(chan, buf, size);
     while (r == -1 && errno == EINTR);
     if (r == -1)
       goto fatal;
@@ -201,6 +211,7 @@ static int stls_query(stls_t* stls,
   struct iovec iov[2];
   int r;
   int tries;
+  int chan;
 
   hdr.version = htons(STLS_VERSION);
   hdr.type = htons(type);
@@ -212,7 +223,7 @@ static int stls_query(stls_t* stls,
    */
   tries = 0;
   do {
-    r = stls_lazy_connect(stls);
+    r = stls_lazy_connect(stls, &chan);
     if (r != 0)
       continue;
 
@@ -221,11 +232,11 @@ static int stls_query(stls_t* stls,
     iov[1].iov_base = body;
     iov[1].iov_len = size;
 
-    r = stls_send(stls, iov, ARRAY_SIZE(iov));
+    r = stls_send(stls, chan, iov, ARRAY_SIZE(iov));
     if (r != 0)
       continue;
 
-    r = stls_recv(stls, resp, sizeof(*resp));
+    r = stls_recv(stls, chan, resp, sizeof(*resp));
     if (r != 0)
       continue;
   } while (r != 0 && ++tries < 2);
@@ -240,7 +251,7 @@ static int stls_query(stls_t* stls,
   if (*resp_body == NULL)
     return -1;
 
-  r = stls_recv(stls, *resp_body, resp->size);
+  r = stls_recv(stls, chan, *resp_body, resp->size);
   if (r != 0) {
     free(*resp_body);
     *resp_body = NULL;
@@ -308,9 +319,24 @@ static RSA_METHOD stls_rsa = {
 };
 
 
+static void stls_close_chan(void* chan) {
+  close((intptr_t) chan);
+}
+
+
+static void stls_once() {
+  int r;
+
+  r = pthread_key_create(&stls_st.key, stls_close_chan);
+  assert(r == 0);
+}
+
+
 static int stls_init(ENGINE* e) {
   if (stls_st.channel_path == NULL)
     stls_st.channel_path = strdup(getenv("STLS_SOCKET"));
+
+  pthread_once(&stls_st.once, stls_once);
   return 1;
 }
 
@@ -319,8 +345,6 @@ static int stls_finish(ENGINE* e) {
   stls_t* st;
 
   st = &stls_st;
-  close(st->channel);
-  st->channel = -1;
   free(st->channel_path);
   st->channel_path = NULL;
   free(st);
