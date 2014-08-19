@@ -88,9 +88,9 @@ static int stls_send(stls_t* stls, struct iovec* iov, int iovcnt) {
   int r;
   size_t left;
 
-  r = stls_lazy_connect(stls);
-  if (r != 0)
-    goto fatal;
+  /* Can't send after disconnect */
+  if (stls->channel == -1)
+    return -1;
 
   left = 0;
   for (r = 0; r < iovcnt; r++)
@@ -179,6 +179,10 @@ static int stls_query(stls_t* stls,
   struct iovec iov[2];
   int r;
 
+  r = stls_lazy_connect(stls);
+  if (r != 0)
+    return r;
+
   hdr.version = htons(STLS_VERSION);
   hdr.type = htons(type);
   hdr.size = htonl(size);
@@ -210,6 +214,13 @@ static int stls_query(stls_t* stls,
     *resp_body = NULL;
   }
   return r;
+}
+
+
+static int stls_rsa_init(RSA* rsa) {
+  rsa->flags |= RSA_FLAG_NO_BLINDING;
+
+  return 1;
 }
 
 
@@ -256,6 +267,7 @@ done:
 
 static RSA_METHOD stls_rsa = {
   .name = "SplitTLS RSA",
+  .init = stls_rsa_init,
   .rsa_mod_exp = stls_rsa_mod_exp
 };
 

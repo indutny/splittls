@@ -1,8 +1,30 @@
 #!/usr/bin/env node
 var stls = require('../');
+var fs = require('fs');
+
+// XXX just for testing
+var defKey =
+    '-----BEGIN RSA PRIVATE KEY-----\n' +
+    'MIICXgIBAAKBgQC46zeFbysX7vHHmIH3COYiB34dOpEVR4rEb6ZZXfkeXoDe7NgZ\n' +
+    'fBbOeqw6iavhr9SRmvFs8ankDCpr2DvY0X3uDdLKyrYNbhrfJxdYB5hhwdKVHGok\n' +
+    'ZdOPH68b/ScMJcsGGgMo7TTMRxx2MZLzESOOJ5BCv4p4BKYibSRCa43lhwIDAQAB\n' +
+    'AoGBAIXZzPCLDXhffydo3vo/uMT9A26IzCfJB0s1PgYGHaK76TBz4+Bej+uZpD0j\n' +
+    'FgVgzs8uhn7DVqQ5oiM5++fvi+Sd+KlyVNgLKe7UTBGYE5Nc9DuDDD0GmJtFvso6\n' +
+    'amsVhECF8sWZVOAwUdrwHhWevp5gJ1cfs3YMTlT9YqdRaWOhAkEA8TJAPfnbEfWf\n' +
+    'saDhWCjanW+w2QEYPa6wYFt+I5L2XPTeKR/wEQ3EzM++vCWxSF5LNSaXIdic847p\n' +
+    'BcIGi/0r6QJBAMREt5r1c6Wf5mS6i/Jg6AdCEUjy0feRCeKemJDMKxyl5m/cU+rk\n' +
+    'p5YBUgwoI8kzc82GEhyg4/NgHQfNcrZdT+8CQFVzChNq21PHgyX46xzCjIDOOwcG\n' +
+    'PkJMCyx3/X446JMSJUrIh9Ji4F/3EYmyiNYsodRYsZ5KEYCwFpn1nUAnF1ECQQC/\n' +
+    'uzl54YomJDyX7jzEfLJuVLY6AyvmowN7JN95pFoBVHf2ktBPySuFuKiEQ7oh1Wet\n' +
+    'QOn0mZ/VovD5LFSBnkp1AkEAgOMkBCJuOfBDvQwrmAAowWQi//7D2x0fhyKcrF6D\n' +
+    'EZYVV125Wodw3zFxmE9p4vb6Hg3X5jSyGMzdE5ZqMgBD7w==\n' +
+    '-----END RSA PRIVATE KEY-----\n';
 
 stls.createServer({
   path: process.env.STLS_SOCKET,
+  key: process.env.STLS_PRIVATE_KEY ?
+      fs.readFileSync(process.env.STLS_PRIVATE_KEY) :
+      new Buffer(defKey),
   target: {
     host: process.env.STLS_TARGET_HOST || '127.0.0.1',
     port: process.env.STLS_TARGET_PORT || 4443,

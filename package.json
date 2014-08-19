@@ -20,6 +20,10 @@
   },
   "homepage": "https://github.com/indutny/splittls",
   "dependencies": {
-    "tls.js": "^0.2.0"
+    "tls.js": "^0.3.0"
+  },
+  "devDependencies": {
+    "asn1.js": "^0.4.0",
+    "bn.js": "^0.13.3"
   }
 }
